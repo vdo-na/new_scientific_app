@@ -8,7 +8,6 @@ const port = 3000;
 
 app.use(express.json());
 
-// --- ПОДКЛЮЧЕНИЕ К REDIS И MYSQL ---
 const redis = new Redis({
   retryStrategy: (times) => Math.min(times * 50, 2000),
 });
@@ -25,7 +24,7 @@ const sequelize = new Sequelize('mydb', 'root', 'password', {
   }
 });
 
-// --- МОДЕЛИ ---
+
 const Movie = sequelize.define('Movie', {
   id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
   title: DataTypes.STRING,
@@ -43,29 +42,26 @@ const Review = sequelize.define('Review', {
 Movie.hasMany(Review, { foreignKey: 'movie_id' });
 Review.belongsTo(Movie, { foreignKey: 'movie_id' });
 
-// ====================================================================
-// ЯДРО АДАПТИВНОГО МЕТОДА: ДАТЧИК И РЕГУЛЯТОР
-// ====================================================================
-let writesCountInWindow = 0;   // счетчик записей за текущий интервал
-let currentWriteRate = 0;      // текущая интенсивность (записей в секунду)
-let currentAdaptiveTTL = 30;   // стартовый TTL по умолчанию
+let writesCountInWindow = 0;   
+let currentWriteRate = 0;      
+let currentAdaptiveTTL = 30;   
 
-// Анализируем интенсивность транзакций каждые 3 секунды
 setInterval(() => {
-  // Вычисляем интенсивность транзакций: кол-во записей / 3 секунды
   currentWriteRate = parseFloat((writesCountInWindow / 3).toFixed(2));
-  writesCountInWindow = 0; // сбрасываем счетчик для следующего окна
+  writesCountInWindow = 0; 
 
-  // ПРАВИЛА АДАПТАЦИИ (НА ОСНОВЕ МАИ И НАШИХ ЭКСПЕРИМЕНТОВ)
   const prevTTL = currentAdaptiveTTL;
-  if (currentWriteRate < 0.2) {
-    currentAdaptiveTTL = 100; // Почти нет записей -> максимизируем попадания в кеш
-  } else if (currentWriteRate < 1.0) {
-    currentAdaptiveTTL = 30;  // Умеренная запись -> сбалансированный режим
-  } else if (currentWriteRate < 3.0) {
-    currentAdaptiveTTL = 10;  // Заметный поток записей -> сжимаем TTL
+
+  if (currentWriteRate < 1.2) {
+    currentAdaptiveTTL = 100; 
+  } else if (currentWriteRate < 3.8) {
+    currentAdaptiveTTL = 60; 
+  } else if (currentWriteRate < 8.5) {
+    currentAdaptiveTTL = 30; 
+  } else if (currentWriteRate < 18.0) {
+    currentAdaptiveTTL = 10;  
   } else {
-    currentAdaptiveTTL = 2;   // Шквал транзакций -> минимальный TTL для свежести
+    currentAdaptiveTTL = 2;   
   }
 
   if (prevTTL !== currentAdaptiveTTL) {
@@ -73,16 +69,12 @@ setInterval(() => {
   }
 }, 3000);
 
-// --- МЕТРИКИ ЭКСПЕРИМЕНТА ---
 let cacheHits = 0;
 let cacheMisses = 0;
 let freshResponses = 0;
 let staleResponses = 0;
 let lastDbWriteTime = 0;
 
-// ====================================================================
-// ЭНДПОИНТ ЧТЕНИЯ (GET)
-// ====================================================================
 app.get('/movies', async (req, res) => {
   const { start_date, end_date } = req.query;
   const startTime = Date.now();
@@ -108,7 +100,6 @@ app.get('/movies', async (req, res) => {
       return res.json({ executionTime: `${duration}ms`, source: 'Redis', data: cachedPayload.data });
     }
 
-    // MISS -> идем в БД
     cacheMisses++;
     freshResponses++;
 
@@ -131,7 +122,6 @@ app.get('/movies', async (req, res) => {
       data: resultMovies
     };
 
-    // СОХРАНЯЕМ С ДИНАМИЧЕСКИ ВЫЧИСЛЕННЫМ TTL!
     await redis.set(cacheKey, JSON.stringify(payloadToCache), 'EX', currentAdaptiveTTL);
 
     const duration = Date.now() - startTime;
@@ -145,9 +135,6 @@ app.get('/movies', async (req, res) => {
   }
 });
 
-// ====================================================================
-// ЭНДПОИНТ ЗАПИСИ (POST)
-// ====================================================================
 app.post('/movies/:id/reviews', async (req, res) => {
   try {
     const { id } = req.params;
@@ -155,7 +142,6 @@ app.post('/movies/:id/reviews', async (req, res) => {
 
     await Review.create({ movie_id: id, score: score || 10, content: content || 'Test' });
 
-    // ДАТЧИК: фиксируем запись и время
     writesCountInWindow++;
     lastDbWriteTime = Date.now();
 
@@ -166,9 +152,6 @@ app.post('/movies/:id/reviews', async (req, res) => {
   }
 });
 
-// ====================================================================
-// ТЕЛЕМЕТРИЯ (КАЖДЫЕ 10 СЕКУНД)
-// ====================================================================
 setInterval(() => {
   const total = cacheHits + cacheMisses;
   const hitRatio = total > 0 ? ((cacheHits / total) * 100).toFixed(2) : 0;

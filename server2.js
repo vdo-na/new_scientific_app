@@ -8,20 +8,15 @@ const port = 3000;
 
 app.use(express.json()); 
 
-// ====================================================================
-// ВАЖНО: ЗДЕСЬ МЕНЯЕМ TTL ДЛЯ КАЖДОГО ЭКСПЕРИМЕНТА (в секундах)
-// Например: 2, 10, 30, 60, 120
-// ====================================================================
+
 const CURRENT_TTL = parseInt(process.env.CACHE_TTL, 10) || 100;
 
-// --- СЧЕТЧИКИ ДЛЯ ПРОВЕРКИ ЭФФЕКТИВНОСТИ ---
 let cacheHits = 0;
 let cacheMisses = 0;
 
-// --- СЧЕТЧИКИ АКТУАЛЬНОСТИ (КРИТЕРИЙ 1 ДЛЯ МАИ / TOPSIS) ---
-let freshResponses = 0; // Актуальные ответы
-let staleResponses = 0; // Устаревшие ответы
-let lastDbWriteTime = 0; // Время последней записи в БД
+let freshResponses = 0;
+let staleResponses = 0;
+let lastDbWriteTime = 0;
 
 const redis = new Redis({
   retryStrategy: (times) => Math.min(times * 50, 2000), 
@@ -56,9 +51,6 @@ const Review = sequelize.define('Review', {
 Movie.hasMany(Review, { foreignKey: 'movie_id' });
 Review.belongsTo(Movie, { foreignKey: 'movie_id' });
 
-// ==========================================
-// ЭНДПОИНТ ЧТЕНИЯ (GET)
-// ==========================================
 app.get('/movies', async (req, res) => {
   const { start_date, end_date } = req.query;
   const startTime = Date.now();
@@ -72,12 +64,11 @@ app.get('/movies', async (req, res) => {
 
       const cachedPayload = JSON.parse(rawCached);
 
-      // ПРОВЕРКА НА АКТУАЛЬНОСТЬ (СВЕЖЕСТЬ) ДАННЫХ
-      // Если запись в БД произошла ПОСЛЕ того, как кеш был создан -> данные устарели
+      
       if (lastDbWriteTime > cachedPayload.cachedAt) {
-        staleResponses++; // Устаревший ответ
+        staleResponses++; 
       } else {
-        freshResponses++; // Актуальный ответ
+        freshResponses++;
       }
 
       const duration = Date.now() - startTime;
@@ -90,7 +81,6 @@ app.get('/movies', async (req, res) => {
       });
     }
 
-    // ПРОМАХ (MISS) -> идем в БД, следовательно данные 100% актуальные
     cacheMisses++;
     freshResponses++;
 
@@ -110,7 +100,6 @@ app.get('/movies', async (req, res) => {
       raw: true, 
     });
 
-    // Сохраняем в кеш объект с датой создания
     const payloadToCache = {
       cachedAt: Date.now(),
       data: resultMovies
@@ -129,9 +118,7 @@ app.get('/movies', async (req, res) => {
   }
 });
 
-// ==========================================
-// ЭНДПОИНТ ЗАПИСИ (POST)
-// ==========================================
+
 app.post('/movies/:id/reviews', async (req, res) => {
   try {
     const { id } = req.params;
@@ -139,7 +126,6 @@ app.post('/movies/:id/reviews', async (req, res) => {
 
     await Review.create({ movie_id: id, score: score || 10, content: content || 'Test' });
 
-    // ФИКСИРУЕМ ВРЕМЯ ПОСЛЕДНЕЙ ЗАПИСИ В БД
     lastDbWriteTime = Date.now();
 
     res.status(201).json({ message: 'OK' });
@@ -149,9 +135,6 @@ app.post('/movies/:id/reviews', async (req, res) => {
   }
 });
 
-// ==========================================
-// МОНИТОРИНГ И ВЫВОД РЕЗУЛЬТАТОВ ДЛЯ СТАТЬИ
-// ==========================================
 setInterval(() => {
   const total = cacheHits + cacheMisses;
   const hitRatio = total > 0 ? ((cacheHits / total) * 100).toFixed(2) : 0;
@@ -176,7 +159,6 @@ setInterval(async () => {
     const currentRam = stats.memory / 1024 / 1024;
     if (currentRam > backendRamPeak) backendRamPeak = currentRam;
   } catch (err) {
-    // игнорируем разовые ошибки замера
   }
 }, 1000);
 
